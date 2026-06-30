@@ -1,0 +1,11 @@
+node_modules
+dist
+.env
+.env.local
+*.log
+logs
+coverage
+test
+.git
+.gitignore
+_smoke.mjs

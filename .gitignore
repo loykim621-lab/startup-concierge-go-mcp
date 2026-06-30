@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+logs/
+coverage/
+.DS_Store
+# 공개 레포 제외 — 테스트(개발 전용)·스크래치. 빌드(npm ci+tsc)에 불필요.
+test/
+*.mjs
+_*
