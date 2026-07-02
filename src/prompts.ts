@@ -67,7 +67,7 @@ export function registerPrompts(server: McpServer): void {
             text:
               `내 사업계획서 서식을 채워서 제출용 문서로 만들어줘. 아래 순서를 번호 그대로 지켜라.\n\n` +
               `1) 공고 확인: grant_id가 없으면 recommend_grants 또는 find_grants로 내가 공고를 고르게 하라.\n` +
-              `2) locate_form_source로 그 공고의 서식 원문 출처를 안내한 뒤, 내가 서식 텍스트를 붙여넣을 때까지 기다려라(파일을 대신 받아오지 말 것).\n` +
+              `2) locate_form_source로 그 공고의 서식 원문 출처를 안내하라. 서식이 HWP 파일이면 "AI가 직접 읽기 어려우니 ①한글에서 [PDF로 저장] 후 그 PDF를 채팅에 올리거나(가장 잘 인식됨) ②서식 내용을 복사해 붙여넣어 달라"고 안내하고, 완성본은 DOCX 파일로 만들어 준다고 알려라. 내가 서식을 줄 때까지 기다려라(파일을 대신 받아오지 말 것).\n` +
               `3) 내가 서식 텍스트를 주면 analyze_form으로 칸·질문 목록을 뽑아라.\n` +
               `4) required_inputs와 교차 확인해 내가 아직 주지 않은 사실만 최소한으로 물어라(한 번에 몰아 묻지 말 것).\n` +
               `5) 내가 답을 주면 compose_application으로 칸별 내용을 조립하라(서식 원래 칸 순서를 지킬 것 — 재배열 금지).\n` +

@@ -819,9 +819,10 @@ export function registerTools(server: McpServer): void {
     {
       title: "공고 서식 출처 안내 (원문 URL 안내 — 자동 다운로드 없음)",
       description:
-        "선택한 공고(grant_id)의 원문 공고 URL을 안내합니다. " +
-        "이 도구는 파일을 대신 내려받지 않습니다 — 공고 페이지에서 사업계획서 서식(hwp/hwpx) 원문을 열어 " +
-        "내용을 복사한 뒤 analyze_form에 붙여넣어 주세요(권장). 첨부파일 자동 수신은 이번 버전에서 지원하지 않습니다.",
+        "선택한 공고(grant_id)의 원문 공고 URL과 서식(HWP) 입수·전달 방법을 안내합니다. " +
+        "이 도구는 파일을 대신 내려받지 않습니다. HWP 파일은 AI가 직접 읽기 어려우므로 " +
+        "①PDF로 변환해 채팅에 올리기(가장 잘 인식) ②서식 내용을 복사해 붙여넣기 중 하나를 사용자에게 안내하세요. " +
+        "완성본은 DOCX 파일로 제공됩니다.",
       inputSchema: locateFormSourceShape,
     },
     async (args): Promise<CallToolResult> => {
@@ -833,8 +834,13 @@ export function registerTools(server: McpServer): void {
         `공고: ${g.제목} (${g.주관기관})`,
         `원문URL: ${g.원문URL}`,
         "",
-        "※ 이 도구는 파일을 대신 받아오지 않습니다 — 위 원문URL에서 사업계획서 서식(hwp/hwpx)을 직접 열어",
-        "  내용을 복사한 뒤 analyze_form에 붙여넣어 주세요(권장). 첨부 URL 자동 수신은 추후 지원 예정입니다.",
+        "※ 이 도구는 파일을 대신 받아오지 않습니다. 위 원문URL에서 사업계획서 서식(보통 HWP 파일)을 내려받으세요.",
+        "",
+        "HWP 파일은 AI가 직접 읽기 어렵습니다. 둘 중 편한 방법으로 서식을 전달해 주세요:",
+        "  ① 한글(HWP)에서 열어 [파일 > PDF로 저장] 후 그 PDF를 채팅에 올리기 — 가장 잘 인식됩니다.",
+        "  ② 서식 내용(칸 제목·안내문)을 복사해 채팅에 붙여넣어 주세요.",
+        "전달해 주시면 칸을 분석해 내용을 만들어 드리고, 완성본은 DOCX 파일로 제공됩니다",
+        "(한글에서 열어 HWP로 저장하거나, 원본 양식에 붙여넣어 마무리하시면 됩니다).",
       ];
 
       return textResult(lines.join("\n"), {
@@ -842,7 +848,7 @@ export function registerTools(server: McpServer): void {
         제목: g.제목,
         주관기관: g.주관기관,
         원문URL: g.원문URL,
-        안내: "파일을 대신 받아오지 않습니다 — 서식 내용을 붙여넣어 주세요(권장). 첨부 URL 자동 수신은 추후 지원.",
+        안내: "파일을 대신 받아오지 않습니다. HWP는 ①PDF로 변환해 올리기(권장) ②내용 붙여넣기로 전달해 주세요. 완성본은 DOCX로 제공.",
         출처: g.source,
         수집시점: g.collected_at?.slice(0, 10) ?? null,
       });
