@@ -11,6 +11,7 @@ import express from "express";
 import { createServer, SERVER_INFO } from "./server.js";
 import { startAutoRefresh } from "./data/refresh.js";
 import { loadStore } from "./data/store.js";
+import { getFile, setPublicBase, setHttpEnabled } from "./lib/filestore.js";
 
 async function runStdio(): Promise<void> {
   const server = createServer();
@@ -42,8 +43,26 @@ async function runHttp(): Promise<void> {
     });
   });
 
+  // 파일 다운로드 (export_document가 발급한 토큰) — filestore.buildDownloadUrl과 경로 일치(/files/:token)
+  app.get("/files/:token", (req, res) => {
+    const file = getFile(req.params.token);
+    if (!file) {
+      res.status(404).json({ error: "파일을 찾을 수 없습니다(만료되었거나 존재하지 않는 토큰입니다)." });
+      return;
+    }
+    res.setHeader("Content-Type", file.mime);
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(file.name)}"`);
+    res.send(file.data);
+  });
+
   // MCP 엔드포인트 (무상태)
   app.post("/mcp", async (req, res) => {
+    // 다운로드 URL 조립용 공개 베이스를 요청 host 기준으로 1회성 갱신(무상태 — 매 요청 최신값 반영)
+    const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
+    const host = req.headers.host;
+    if (host) setPublicBase(`${proto}://${host}`);
+    setHttpEnabled(true);
+
     const server = createServer();
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // 무상태

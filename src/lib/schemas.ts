@@ -201,3 +201,42 @@ export const assemblePlanShape = {
     })
   ).optional().describe("합본에 배치할 도식 목록. 섹션 매핑 불가한 kind는 부록으로 처리."),
 };
+
+// ── 서류 원스톱(서식 붙여넣기→조립→내보내기) 4종 tool의 inputSchema (ZodRawShape) ──
+
+/** locate_form_source — 공고 원문/사업안내 URL 안내(파일 자동 다운로드는 하지 않음). */
+export const locateFormSourceShape = {
+  grant_id: z.string().describe("find_grants/recommend_grants로 얻은 공고 id (예: kstartup:178198)"),
+};
+
+/** analyze_form — 붙여넣은 서식 텍스트를 분석해 칸·질문 목록으로 변환. */
+export const analyzeFormShape = {
+  form_text: z.string().min(1).describe("창업자가 공고 서식(hwp/hwpx 등)에서 복사해 붙여넣은 전체 텍스트."),
+  grant_id: z.string().optional().describe("선택 공고 id(있으면 결과에 그대로 표기 — 사실을 지어내지 않음)."),
+};
+
+/** compose_application — 서식 칸별 답변을 유형별 작성 규칙으로 조립(서식 원래 순서 보존). */
+const composeFieldShape = z.object({
+  칸이름: z.string().describe("서식에 표기된 칸 이름(analyze_form의 필드목록[].칸이름을 그대로 사용 권장)."),
+  유형: z.enum(["표", "서술", "자금표", "체크", "기타"]).optional().describe("칸 유형(analyze_form 출력 5종 그대로 수용). 없거나 '기타'면 서술로 처리."),
+  psst매핑: z.enum(["P", "S1", "S2", "T"]).optional().describe("참고용 메타(순서 재배열에는 쓰이지 않음)."),
+  답변: z.string().optional().describe("창업자가 제공한 사실(답). 없으면 '[입력 필요]'로 표시됨."),
+});
+
+export const composeApplicationShape = {
+  fields: z.array(composeFieldShape).describe("서식 칸 목록(원래 등장 순서 그대로 전달 — PSST 순서로 재배열하지 않음)."),
+  grant_id: z.string().optional().describe("선택 공고 id(맥락 표기용 — 사실을 지어내지 않음)."),
+  사업아이템명: z.string().optional().describe("있으면 문서 상단 맥락에 표기."),
+};
+
+/** export_document — 합본/조립 결과를 다운로드 가능한 문서(docx/txt)로 변환. */
+export const exportDocumentShape = {
+  제목: z.string().min(1).describe("문서 제목(파일명에도 사용됨)."),
+  sections: z.array(
+    z.object({
+      칸이름: z.string().describe("섹션/칸 이름(문서 내 소제목)."),
+      내용: z.string().describe("섹션 본문 텍스트."),
+    })
+  ).describe("문서를 구성할 섹션 목록(순서 그대로 반영)."),
+  format: z.enum(["docx", "txt"]).default("docx").describe("출력 형식. 기본 docx(한글에서 열람 가능), txt는 전체텍스트 그대로."),
+};

@@ -18,6 +18,10 @@ import {
   recommendGrantsShape,
   requiredInputsShape,
   assemblePlanShape,
+  locateFormSourceShape,
+  analyzeFormShape,
+  composeApplicationShape,
+  exportDocumentShape,
 } from "../lib/schemas.js";
 import { getGrant, queryGrants, loadStore, partitionByRegion } from "../data/store.js";
 import { 표준루브릭, 기본결격조항 } from "../data/defaults.js";
@@ -42,6 +46,13 @@ import type { RecommendInput } from "../domain/recommend.js";
 import { requiredInputs } from "../domain/bizplan/required.js";
 import { assemblePlan } from "../domain/bizplan/assemble.js";
 import type { AssembleInput, AssembleChart } from "../domain/bizplan/assemble.js";
+import { analyzeFormText } from "../domain/bizplan/form.js";
+import type { FormAnalysisInput } from "../domain/bizplan/form.js";
+import { composeApplication } from "../domain/bizplan/compose.js";
+import type { ComposeInput, ComposeField } from "../domain/bizplan/compose.js";
+import { buildDocx } from "../lib/docxgen.js";
+import { putFile, buildDownloadUrl } from "../lib/filestore.js";
+import { 작성고지 } from "../domain/disclaimer.js";
 
 function textResult(text: string, structuredContent?: Record<string, unknown>): CallToolResult {
   const res: CallToolResult = { content: [{ type: "text", text }] };
@@ -65,6 +76,17 @@ function grantNotFound(id: string): CallToolResult {
 function resolveRequirements(reqs: GrantRequirements | undefined): GrantRequirements {
   const base = reqs ?? { 창업확인: true };
   return { ...base, 결격조항: base.결격조항 ?? { ...기본결격조항 } };
+}
+
+/** 파일명 안전화: 제목을 파일명으로 쓸 수 있게 위험 문자 제거·길이 제한. 결정적(난수 없음). */
+function sanitizeFilename(제목: string): string {
+  const cleaned = (제목 || "문서")
+    .trim()
+    .replace(/[\\/:*?"<>|\r\n\t]+/g, "_")
+    .replace(/\.{2,}/g, "_") // '..' 경로조작 토큰 제거(단일 마침표는 허용)
+    .replace(/\s+/g, "_")
+    .slice(0, 60);
+  return cleaned || "문서";
 }
 
 export function registerTools(server: McpServer): void {
@@ -787,6 +809,245 @@ export function registerTools(server: McpServer): void {
         },
         입력필요: result.입력필요,
         고지: result.고지,
+      });
+    }
+  );
+
+  // ⑭ locate_form_source — 공고 서식 출처 안내(파일을 대신 받아오지 않음)
+  server.registerTool(
+    "locate_form_source",
+    {
+      title: "공고 서식 출처 안내 (원문 URL 안내 — 자동 다운로드 없음)",
+      description:
+        "선택한 공고(grant_id)의 원문 공고 URL을 안내합니다. " +
+        "이 도구는 파일을 대신 내려받지 않습니다 — 공고 페이지에서 사업계획서 서식(hwp/hwpx) 원문을 열어 " +
+        "내용을 복사한 뒤 analyze_form에 붙여넣어 주세요(권장). 첨부파일 자동 수신은 이번 버전에서 지원하지 않습니다.",
+      inputSchema: locateFormSourceShape,
+    },
+    async (args): Promise<CallToolResult> => {
+      const g = getGrant(args.grant_id);
+      if (!g) return grantNotFound(args.grant_id);
+
+      const lines: string[] = [
+        "[공고 서식 출처 안내]",
+        `공고: ${g.제목} (${g.주관기관})`,
+        `원문URL: ${g.원문URL}`,
+        "",
+        "※ 이 도구는 파일을 대신 받아오지 않습니다 — 위 원문URL에서 사업계획서 서식(hwp/hwpx)을 직접 열어",
+        "  내용을 복사한 뒤 analyze_form에 붙여넣어 주세요(권장). 첨부 URL 자동 수신은 추후 지원 예정입니다.",
+      ];
+
+      return textResult(lines.join("\n"), {
+        grant_id: g.id,
+        제목: g.제목,
+        주관기관: g.주관기관,
+        원문URL: g.원문URL,
+        안내: "파일을 대신 받아오지 않습니다 — 서식 내용을 붙여넣어 주세요(권장). 첨부 URL 자동 수신은 추후 지원.",
+        출처: g.source,
+        수집시점: g.collected_at?.slice(0, 10) ?? null,
+      });
+    }
+  );
+
+  // ⑮ analyze_form — 붙여넣은 서식 텍스트를 필드·질문 목록으로 분석
+  server.registerTool(
+    "analyze_form",
+    {
+      title: "서식 분석 (붙여넣은 서식 텍스트 → 칸·질문 목록)",
+      description:
+        "창업자가 공고 서식(hwp/hwpx 등)에서 복사해 붙여넣은 텍스트를 분석해, " +
+        "서식의 각 칸(필드)이 무엇을 요구하는지 원래 등장 순서 그대로 구조화합니다. " +
+        "표·서술·자금표·체크 유형을 판정하고 PSST 섹션 매핑, 각 칸에 필요한 사실을 묻는 질문을 함께 반환합니다. " +
+        "서식으로 보이지 않는 텍스트는 정중히 재요청하며, 창업자의 답을 지어내지 않습니다.",
+      inputSchema: analyzeFormShape,
+    },
+    async (args): Promise<CallToolResult> => {
+      const input: FormAnalysisInput = {
+        form_text: args.form_text,
+        grant_id: args.grant_id,
+      };
+      const result = analyzeFormText(input);
+
+      if (result.오류) {
+        // 서식 인식 실패 — isError로 취급하지 않고 정중한 재요청 텍스트를 그대로 노출.
+        return textResult(`[서식 분석] ${result.오류}`, {
+          grant_id: result.grant_id ?? null,
+          오류: result.오류,
+          필드목록: [],
+          감지요약: result.감지요약,
+          입력필요: [],
+          고지: result.고지,
+        });
+      }
+
+      const lines: string[] = [
+        "[서식 분석 결과]",
+        result.감지요약,
+        "",
+        "■ 칸 목록 (서식 등장 순서):",
+      ];
+      result.필드목록.forEach((f) => {
+        lines.push(`${f.순번}. [${f.유형}] ${f.칸이름}${f.psst매핑 ? ` (PSST ${f.psst매핑})` : ""}`);
+        if (f.안내문구) lines.push(`   안내: ${f.안내문구}`);
+        lines.push(`   질문: ${f.질문}`);
+      });
+      lines.push(`\n고지: ${result.고지}`);
+
+      return textResult(lines.join("\n"), {
+        grant_id: result.grant_id ?? null,
+        필드목록: result.필드목록,
+        감지요약: result.감지요약,
+        입력필요: result.입력필요,
+        고지: result.고지,
+      });
+    }
+  );
+
+  // ⑯ compose_application — 서식 칸별 답변을 유형별 규칙으로 조립(서식 순서 보존)
+  server.registerTool(
+    "compose_application",
+    {
+      title: "제출용 문서 조립 (서식 칸별 답변 → 붙여넣기용 본문, 원래 순서 보존)",
+      description:
+        "analyze_form이 찾아낸 서식 칸에 창업자의 답변을 채워, 칸 유형별 작성 규칙(표/서술/자금표/체크)으로 " +
+        "정돈된 붙여넣기용 문서를 조립합니다. 서식의 원래 칸 순서를 그대로 보존합니다(PSST 순서 재배열 없음). " +
+        "0점답변·정성적 표현 경고, 자금표 합계 자동검증, 답변 없는 칸의 다음 질문을 함께 반환합니다. " +
+        "체크(서명) 칸은 자동 완성할 수 없어 항상 확인필요로 표시합니다.",
+      inputSchema: composeApplicationShape,
+    },
+    async (args): Promise<CallToolResult> => {
+      const fields: ComposeField[] = args.fields.map((f) => ({
+        칸이름: f.칸이름,
+        유형: f.유형,
+        psst매핑: f.psst매핑,
+        답변: f.답변,
+      }));
+      const input: ComposeInput = {
+        fields,
+        grant_id: args.grant_id,
+        사업아이템명: args.사업아이템명,
+      };
+      const result = composeApplication(input);
+
+      const lines: string[] = ["[제출용 문서 조립 결과]"];
+      if (args.사업아이템명) lines.push(`아이템명: ${args.사업아이템명}`);
+
+      lines.push("\n■ 칸별 결과:");
+      result.문서칸.forEach((c) => {
+        const mark = c.상태 === "완성" ? "✅" : c.상태 === "입력필요" ? "☐" : "⚠️";
+        lines.push(`${mark} [${c.상태}] ${c.칸이름}`);
+      });
+
+      if (result.경고.length > 0) {
+        lines.push("\n⚠️ 경고:");
+        result.경고.forEach((w) => lines.push(`  • ${w}`));
+      }
+
+      if (result.미완성.length > 0) {
+        lines.push(`\n■ 입력 필요 칸 (${result.미완성.length}개):`);
+        result.미완성.forEach((n) => lines.push(`  - ${n}`));
+      }
+
+      if (result.다음질문.length > 0) {
+        lines.push("\n■ 다음 질문:");
+        result.다음질문.forEach((q, i) => lines.push(`  ${i + 1}. ${q}`));
+      }
+
+      if (result.자금검증) {
+        const fv = result.자금검증;
+        lines.push("\n■ 자금 검증:");
+        lines.push(`  자동합계: ${fv.합계.toLocaleString("en-US")}원`);
+        if (fv.표기합계 !== undefined) {
+          lines.push(`  표기합계: ${fv.표기합계.toLocaleString("en-US")}원 — 일치여부: ${fv.일치여부 ? "일치" : "불일치"}`);
+        }
+      }
+
+      lines.push("\n■ 전체 문서 (structuredContent.전체텍스트 참조)");
+      const 미리보기 = result.전체텍스트.slice(0, 500) + (result.전체텍스트.length > 500 ? "\n...(이하 생략)" : "");
+      lines.push(미리보기);
+
+      lines.push(`\n고지: ${result.고지}`);
+
+      return textResult(lines.join("\n"), {
+        문서칸: result.문서칸,
+        전체텍스트: result.전체텍스트,
+        미완성: result.미완성,
+        경고: result.경고,
+        다음질문: result.다음질문,
+        자금검증: result.자금검증 ?? null,
+        고지: result.고지,
+      });
+    }
+  );
+
+  // ⑰ export_document — 문서를 다운로드 가능한 파일(docx/txt)로 변환
+  server.registerTool(
+    "export_document",
+    {
+      title: "문서 내보내기 (docx/txt 다운로드 링크 + 전문 폴백)",
+      description:
+        "제목과 섹션(칸이름·내용) 목록을 받아 다운로드 가능한 문서 파일(docx 기본, txt 선택)로 변환합니다. " +
+        "응답에는 항상 (a) 가능하면 다운로드 URL(30분 후 만료), (b) 전체 문서 텍스트 전문, " +
+        "(c) 링크가 안 열릴 때를 위한 전문 복사 안내가 함께 포함됩니다. " +
+        "HTTP(웹) 배포 환경이 아니면(로컬/stdio) 다운로드 URL 없이 전문만 제공됩니다.",
+      inputSchema: exportDocumentShape,
+    },
+    async (args): Promise<CallToolResult> => {
+      const format = args.format ?? "docx";
+      const 제목 = args.제목;
+      const sections = args.sections;
+
+      const 전체텍스트 = sections.map((s) => `## ${s.칸이름}\n${s.내용}`).join("\n\n");
+      const 파일명base = sanitizeFilename(제목);
+
+      let token: string;
+      let expiresAt: number;
+      let mime: string;
+      let 파일명: string;
+
+      try {
+        if (format === "txt") {
+          const buf = Buffer.from(`${제목}\n\n${전체텍스트}`, "utf-8");
+          mime = "text/plain; charset=utf-8";
+          파일명 = `${파일명base}.txt`;
+          ({ token, expiresAt } = putFile(파일명, buf, mime));
+        } else {
+          const buf = await buildDocx(제목, sections);
+          mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+          파일명 = `${파일명base}.docx`;
+          ({ token, expiresAt } = putFile(파일명, buf, mime));
+        }
+      } catch (err) {
+        return errorResult(
+          `문서 생성에 실패했습니다: ${err instanceof Error ? err.message : String(err)}. ` +
+          "sections 내용을 확인하고 다시 시도하세요. 급하면 format을 'txt'로 바꿔보세요."
+        );
+      }
+
+      const url = buildDownloadUrl(token);
+      const 만료분 = Math.round((expiresAt - Date.now()) / 60000);
+
+      const lines: string[] = [
+        "[문서 내보내기 결과]",
+        `파일명: ${파일명} (형식: ${format})`,
+      ];
+      if (url) {
+        lines.push(`다운로드 URL: ${url} (약 ${만료분}분 후 만료)`);
+      } else {
+        lines.push("다운로드 URL: 로컬 모드 — 아래 전문 사용 (HTTP 배포 환경이 아니면 링크가 제공되지 않습니다)");
+      }
+      lines.push("※ 링크가 안 열리면 이 전문을 복사해 쓰세요 · 30분 후 만료");
+      lines.push("\n■ 전체 문서 전문:");
+      lines.push(전체텍스트);
+
+      return textResult(lines.join("\n"), {
+        파일명,
+        format,
+        다운로드URL: url,
+        만료시각: new Date(expiresAt).toISOString(),
+        전체텍스트,
+        안내: "링크가 안 열리면 이 전문을 복사해 쓰세요 · 30분 후 만료",
+        고지: 작성고지,
       });
     }
   );

@@ -48,7 +48,40 @@ export function registerPrompts(server: McpServer): void {
     })
   );
 
-  // ② 공고 빠른 매칭
+  // ② 서류 원스톱 (서식 붙여넣기 → 조립 → 내보내기)
+  server.registerPrompt(
+    "서류_원스톱",
+    {
+      title: "서류 원스톱 (서식 붙여넣기 → 자동 조립 → 파일로 받기)",
+      description:
+        "공고 서식을 붙여넣으면 칸을 분석하고, 부족한 정보만 물어본 뒤, 답변을 정돈해 조립하고, " +
+        "점검을 거쳐 다운로드 가능한 문서 파일로 만들어줍니다.",
+      argsSchema: { grant_id: z.string().optional().describe("이미 고른 공고 id(선택). 없으면 먼저 공고를 찾는다.") },
+    },
+    ({ grant_id }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text:
+              `내 사업계획서 서식을 채워서 제출용 문서로 만들어줘. 아래 순서를 번호 그대로 지켜라.\n\n` +
+              `1) 공고 확인: grant_id가 없으면 recommend_grants 또는 find_grants로 내가 공고를 고르게 하라.\n` +
+              `2) locate_form_source로 그 공고의 서식 원문 출처를 안내한 뒤, 내가 서식 텍스트를 붙여넣을 때까지 기다려라(파일을 대신 받아오지 말 것).\n` +
+              `3) 내가 서식 텍스트를 주면 analyze_form으로 칸·질문 목록을 뽑아라.\n` +
+              `4) required_inputs와 교차 확인해 내가 아직 주지 않은 사실만 최소한으로 물어라(한 번에 몰아 묻지 말 것).\n` +
+              `5) 내가 답을 주면 compose_application으로 칸별 내용을 조립하라(서식 원래 칸 순서를 지킬 것 — 재배열 금지).\n` +
+              `6) plan_review로 조립된 내용을 재검증하고, 0점답변·정성적 표현·경고가 있으면 다시 쓰게 하라.\n` +
+              `7) export_document로 최종 파일을 만들고, 다운로드 URL과 전체 문서 전문을 함께 안내하라(링크가 안 열리면 전문을 복사해 쓰라고 안내).\n\n` +
+              공통원칙 +
+              (grant_id ? `\n\n[이미 고른 공고 id]\n${grant_id}` : `\n\n먼저 어떤 공고인지부터 확인하라.`),
+          },
+        },
+      ],
+    })
+  );
+
+  // ③ 공고 빠른 매칭
   server.registerPrompt(
     "공고_빠른매칭",
     {
