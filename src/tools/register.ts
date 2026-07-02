@@ -56,6 +56,60 @@ import { putFile, buildDownloadUrl } from "../lib/filestore.js";
 import { 작성고지 } from "../domain/disclaimer.js";
 import { upgradeRequest } from "../domain/upgrade.js";
 import type { UpgradeInput } from "../domain/upgrade.js";
+import type { Profile, 결격상태, PlanSummary } from "../domain/types.js";
+
+// ── 입력 경계 매핑 헬퍼 (영문 tool 입력 → 도메인 한글 필드) ──
+// Anthropic API가 도구 입력 스키마 property 키에 한글을 불허하므로 schemas.ts는 영문 키를 쓴다.
+// 도메인 계층(src/domain/**)은 한글 필드를 그대로 유지하며, 이 매핑이 그 경계를 담당한다.
+
+/** zod profileSchema로 검증된 입력 → 도메인 Profile(한글 필드) */
+function mapProfileInput(p: Record<string, unknown> | undefined): Profile {
+  if (!p) return {};
+  const d = p.disqualification as Record<string, unknown> | undefined;
+  const 결격상태: 결격상태 | undefined = d
+    ? {
+        채무불이행: d.debt_default as boolean | undefined,
+        채무조정: d.debt_adjustment as string | undefined,
+        체납: d.tax_arrears as boolean | undefined,
+        체납유예: d.arrears_deferred as boolean | undefined,
+        휴폐업: d.business_suspended as boolean | undefined,
+        동시수행_중앙부처창업사업화: d.concurrent_program as boolean | undefined,
+        기수혜: d.prior_awards as string[] | undefined,
+        환수금미반환: d.unreturned_funds as boolean | undefined,
+        임금체불: d.wage_arrears as boolean | undefined,
+        참여제한: d.participation_restricted as boolean | undefined,
+      }
+    : undefined;
+  return {
+    업력_개월: p.months_in_business as number | undefined,
+    개업일: p.founding_date as string | undefined,
+    지역: p.region as string | undefined,
+    업종: p.industry as string | undefined,
+    ksic5: p.ksic5 as string | undefined,
+    기존사업자: p.has_existing_business as boolean | undefined,
+    기존업종_ksic5: p.existing_ksic5 as string | undefined,
+    신규업종_ksic5: p.new_ksic5 as string | undefined,
+    폐업여부: p.closed as boolean | undefined,
+    폐업경과_개월: p.months_since_closure as number | undefined,
+    신산업해당: p.new_industry as boolean | undefined,
+    투자유치이력: p.has_investment as boolean | undefined,
+    결격상태,
+    가점사유: p.bonus_reasons as string[] | undefined,
+  };
+}
+
+/** zod planSummarySchema로 검증된 입력 → 도메인 PlanSummary(한글 필드) */
+function mapPlanSummaryInput(p: Record<string, unknown> | undefined): PlanSummary {
+  if (!p) return {};
+  return {
+    기술: p.tech as string | undefined,
+    시장: p.market as string | undefined,
+    팀: p.team as string | undefined,
+    지역연계: p.regional as string | undefined,
+    재무: p.finance as string | undefined,
+    등급: p.grades as PlanSummary["등급"],
+  };
+}
 
 function textResult(text: string, structuredContent?: Record<string, unknown>): CallToolResult {
   const res: CallToolResult = { content: [{ type: "text", text }] };
@@ -175,7 +229,8 @@ export function registerTools(server: McpServer): void {
       const g = getGrant(args.grant_id);
       if (!g) return grantNotFound(args.grant_id);
       const req = resolveRequirements(g.requirements);
-      const result = checkEligibility(req, args.profile);
+      const profile = mapProfileInput(args.profile);
+      const result = checkEligibility(req, profile);
       return textResult(renderEligibility(g, result), {
         grant_id: g.id,
         판정: result.판정,
@@ -202,7 +257,8 @@ export function registerTools(server: McpServer): void {
       const g = getGrant(args.grant_id);
       if (!g) return grantNotFound(args.grant_id);
       const rubric = g.rubric ?? 표준루브릭;
-      const result = scoreApplication(rubric, args.plan_summary, { 합격선: args.합격선 });
+      const planSummary = mapPlanSummaryInput(args.plan_summary);
+      const result = scoreApplication(rubric, planSummary, { 합격선: args.passing_score });
       return textResult(renderScore(g, result), {
         grant_id: g.id,
         총점: result.총점,
@@ -232,8 +288,8 @@ export function registerTools(server: McpServer): void {
       const rubric = g.rubric ?? 표준루브릭;
       const strategy = buildWinStrategy(
         req,
-        args.profile ?? {},
-        args.plan_summary ?? {},
+        mapProfileInput(args.profile),
+        mapPlanSummaryInput(args.plan_summary),
         rubric,
         { 마감일: g.마감일, 제목: g.제목 }
       );
@@ -274,9 +330,9 @@ export function registerTools(server: McpServer): void {
       }
 
       const profile = {
-        ...(args.업종 ? { 업종: args.업종 } : {}),
-        ...(args.지역 ? { 지역: args.지역 } : {}),
-        ...(args.대표경력 ? { 대표경력: args.대표경력 } : {}),
+        ...(args.industry ? { 업종: args.industry } : {}),
+        ...(args.region ? { 지역: args.region } : {}),
+        ...(args.founder_experience ? { 대표경력: args.founder_experience } : {}),
       };
 
       const result = buildPlanOutline({ grantMeta, profile });
@@ -327,14 +383,41 @@ export function registerTools(server: McpServer): void {
       inputSchema: marketResearchShape,
     },
     async (args): Promise<CallToolResult> => {
-      // 타입 변환: zod 파싱된 args → MarketResearchInput
+      // 타입 변환: zod 파싱된 영문 args → MarketResearchInput(도메인 한글 필드)
+      const pestArg = args.pest as
+        | { political?: string; economic?: string; social?: string; technological?: string }
+        | undefined;
+      const pest: MarketResearchInput["pest"] = pestArg
+        ? {
+            정치: pestArg.political,
+            경제: pestArg.economic,
+            사회: pestArg.social,
+            기술: pestArg.technological,
+          }
+        : undefined;
+
+      type MsField = { value?: number; unit?: string; basis?: string; source?: string } | undefined;
+      const msArg = args.marketSize as
+        | { tam?: MsField; sam?: MsField; som?: MsField; lam?: MsField }
+        | undefined;
+      const mapMs = (f: MsField) =>
+        f ? { value: f.value, unit: f.unit, 근거: f.basis, 출처: f.source } : undefined;
+      const marketSize: MarketResearchInput["marketSize"] = msArg
+        ? {
+            tam: mapMs(msArg.tam),
+            sam: mapMs(msArg.sam),
+            som: mapMs(msArg.som),
+            lam: mapMs(msArg.lam),
+          }
+        : undefined;
+
       const input: MarketResearchInput = {
-        업종: args.업종,
-        지역: args.지역,
-        pest: args.pest as MarketResearchInput["pest"],
-        marketSize: args.marketSize as MarketResearchInput["marketSize"],
+        업종: args.industry,
+        지역: args.region,
+        pest,
+        marketSize,
         competitors: args.competitors as MarketResearchInput["competitors"],
-        비교축: args.비교축,
+        비교축: args.compare_axes,
       };
 
       const result = buildMarketResearch(input);
@@ -398,12 +481,27 @@ export function registerTools(server: McpServer): void {
       inputSchema: buildRoadmapShape,
     },
     async (args): Promise<CallToolResult> => {
+      type FutureMilestoneArg = {
+        time: string;
+        axis: "아이템" | "자금" | "마케팅" | "운영";
+        content: string;
+        status?: "완료" | "진행중" | "예정";
+        rationale?: string;
+      };
+      const pastPrep = args.past_preparations as Array<{ time?: string; content: string }> | undefined;
+      const futureMs = args.future_milestones as FutureMilestoneArg[] | undefined;
       const input: RoadmapInput = {
-        사업명: args.사업명,
-        거점: args.거점,
-        과거준비: args.과거준비,
-        미래계획: args.미래계획 as RoadmapInput["미래계획"],
-        자금계획: args.자금계획,
+        사업명: args.business_name,
+        거점: args.base_region,
+        과거준비: pastPrep?.map((p) => ({ 시점: p.time, 내용: p.content })),
+        미래계획: futureMs?.map((m) => ({
+          시점: m.time,
+          축: m.axis,
+          내용: m.content,
+          상태: m.status,
+          인과: m.rationale,
+        })),
+        자금계획: args.funding_plan,
       };
 
       const result = buildRoadmap(input);
@@ -576,9 +674,9 @@ export function registerTools(server: McpServer): void {
     },
     async (args): Promise<CallToolResult> => {
       const input: HwpLayoutInput = {
-        목표페이지: args.목표페이지,
-        현재글자수: args.현재글자수,
-        섹션별글자수: args.섹션별글자수,
+        목표페이지: args.target_pages,
+        현재글자수: args.current_chars,
+        섹션별글자수: args.section_chars,
       };
 
       const result = buildHwpLayout(input);
@@ -631,10 +729,10 @@ export function registerTools(server: McpServer): void {
     },
     async (args): Promise<CallToolResult> => {
       const input: RecommendInput = {
-        키워드: args.키워드,
-        지역: args.지역,
-        단계: args.단계 as RecommendInput["단계"],
-        업종: args.업종,
+        키워드: args.keywords,
+        지역: args.region,
+        단계: args.stage as RecommendInput["단계"],
+        업종: args.industry,
         deadline_within_days: args.deadline_within_days,
         limit: args.limit,
       };
@@ -764,7 +862,7 @@ export function registerTools(server: McpServer): void {
           S2: args.sections.S2,
           T: args.sections.T,
         },
-        목표페이지: args.목표페이지,
+        목표페이지: args.target_pages,
         charts,
       };
 
@@ -903,9 +1001,21 @@ export function registerTools(server: McpServer): void {
       });
       lines.push(`\n고지: ${result.고지}`);
 
+      // structuredContent.필드목록 항목 키는 compose_application '입력'(fields[])과 동일한 영문 키로
+      // 맞춘다(무가공 전달 계약 — 호스트가 이 배열을 그대로 복사해 compose_application에 넣는다).
+      // 텍스트 렌더링(위 lines)은 한국어를 유지한다.
+      const 필드목록영문 = result.필드목록.map((f) => ({
+        order: f.순번,
+        field_name: f.칸이름,
+        field_type: f.유형,
+        guidance: f.안내문구,
+        psst_section: f.psst매핑,
+        question: f.질문,
+      }));
+
       return textResult(lines.join("\n"), {
         grant_id: result.grant_id ?? null,
-        필드목록: result.필드목록,
+        필드목록: 필드목록영문,
         감지요약: result.감지요약,
         입력필요: result.입력필요,
         고지: result.고지,
@@ -927,20 +1037,20 @@ export function registerTools(server: McpServer): void {
     },
     async (args): Promise<CallToolResult> => {
       const fields: ComposeField[] = args.fields.map((f) => ({
-        칸이름: f.칸이름,
-        유형: f.유형,
-        psst매핑: f.psst매핑,
-        답변: f.답변,
+        칸이름: f.field_name,
+        유형: f.field_type,
+        psst매핑: f.psst_section,
+        답변: f.answer,
       }));
       const input: ComposeInput = {
         fields,
         grant_id: args.grant_id,
-        사업아이템명: args.사업아이템명,
+        사업아이템명: args.business_item,
       };
       const result = composeApplication(input);
 
       const lines: string[] = ["[제출용 문서 조립 결과]"];
-      if (args.사업아이템명) lines.push(`아이템명: ${args.사업아이템명}`);
+      if (args.business_item) lines.push(`아이템명: ${args.business_item}`);
 
       lines.push("\n■ 칸별 결과:");
       result.문서칸.forEach((c) => {
@@ -1004,8 +1114,8 @@ export function registerTools(server: McpServer): void {
     },
     async (args): Promise<CallToolResult> => {
       const format = args.format ?? "docx";
-      const 제목 = args.제목;
-      const sections = args.sections;
+      const 제목 = args.title;
+      const sections = args.sections.map((s) => ({ 칸이름: s.field_name, 내용: s.content }));
 
       const 전체텍스트 = sections.map((s) => `## ${s.칸이름}\n${s.내용}`).join("\n\n");
       const 파일명base = sanitizeFilename(제목);
@@ -1077,7 +1187,7 @@ export function registerTools(server: McpServer): void {
       inputSchema: upgradeRequestShape,
     },
     async (args): Promise<CallToolResult> => {
-      const input: UpgradeInput = { 요청: args.요청, 맥락: args.맥락 };
+      const input: UpgradeInput = { 요청: args.request, 맥락: args.context };
       const result = upgradeRequest(input);
 
       // 프리뷰 병행 실행: '공고찾기'류 의도에서만, 사용자 사실 없이도 안전하게 미리 보여줄 수 있는

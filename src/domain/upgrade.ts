@@ -269,18 +269,18 @@ function 확장검색지시(s: ExtractedSignals): string {
   const region = s.지역 ? s.지역 : "";
   const kwStr = s.업종.length ? s.업종.join(" ") : "";
   const kwArr = s.업종.length ? s.업종.map((x) => `'${x}'`).join(", ") : "";
-  // find_grants: region/keywords 는 단수 string. recommend_grants: 지역/키워드 는 각각 string / string[].
+  // find_grants: region/keywords 는 단수 string. recommend_grants: region/keywords 는 각각 string / string[].
   const fgArgs: string[] = [];
   if (kwStr) fgArgs.push(`keywords:'${kwStr}'`);
   if (region) fgArgs.push(`region:'${region}'`);
   if (s.단계) fgArgs.push(`stage:'${s.단계}'`);
   const rgArgs: string[] = [];
-  if (kwArr) rgArgs.push(`키워드:[${kwArr}]`);
-  if (region) rgArgs.push(`지역:'${region}'`);
-  if (s.단계) rgArgs.push(`단계:'${s.단계}'`);
+  if (kwArr) rgArgs.push(`keywords:[${kwArr}]`);
+  if (region) rgArgs.push(`region:'${region}'`);
+  if (s.단계) rgArgs.push(`stage:'${s.단계}'`);
   return (
     `recommend_grants({${rgArgs.join(", ")}})와 find_grants({${fgArgs.join(", ")}})를 나란히 병행 호출하라. ` +
-    `두 tool은 인자 체계가 다르다(find_grants.region/keywords=단수 string, recommend_grants.지역=string·키워드=string[]) — 인자명을 서로 대입하지 마라. ` +
+    `두 tool은 인자 형태가 다르다(find_grants.keywords=단수 string, recommend_grants.keywords=string[]) — 형태를 서로 대입하지 마라. ` +
     (region
       ? `${region} 밀착 공고를 최우선으로 두되, 접수 지역이 '전국'이라 ${region} 기업도 지원 가능한 공고까지 함께 보여줘라(지역 배제 금지). `
       : "") +
@@ -365,7 +365,7 @@ function 템플릿(의도: Intent): Template {
           `[의도: 자격확인]\n` +
           `1) 대상 공고를 확정하라. grant_id=${s.grant_id ?? "(미지정)"}. 없으면 recommend_grants/find_grants로 먼저 공고를 고르게 하라.\n` +
           `2) required_inputs({grant_id})로 판정에 필요한 프로필 항목을 확인하고, 사용자가 아직 주지 않은 것만 우선순위대로 물어라(업력→지역→업종→투자유치→결격).\n` +
-          `3) check_eligibility({grant_id, profile})로 판정하라. 근거 없는 항목은 '확인 불가'로 남기고 지어내지 마라.\n` +
+          `3) check_eligibility({grant_id, profile:{months_in_business,region,industry,has_investment,disqualification}})로 판정하라. 근거 없는 항목은 '확인 불가'로 남기고 지어내지 마라.\n` +
           `4) 부적합/확인필요면 사유·대안·보완액션을 제시하고, 적합이면 win_strategy({grant_id, profile})로 합격 전략까지 이어가라.`,
       };
 
@@ -398,10 +398,10 @@ function 템플릿(의도: Intent): Template {
           `1) 대상 공고 확정(grant_id=${s.grant_id ?? "(미지정)"}). 없으면 recommend_grants/find_grants로 고르게 한 뒤 locate_form_source({grant_id})로 서식 출처를 안내하라. 서식이 HWP면 'PDF 변환 업로드 또는 전체복사 붙여넣기'를 안내하고 완성본은 DOCX로 제공된다고 알려라. 서식을 줄 때까지 기다려라(파일을 대신 받아오지 마라).\n` +
           `2) 사용자가 서식 텍스트를 주면 analyze_form({form_text, grant_id?})로 칸·질문 목록을 뽑아라(원래 순서 보존).\n` +
           `3) required_inputs({grant_id?, provided?})와 교차해 아직 없는 사실만 최소로 물어라(몰아 묻지 마라).\n` +
-          `4) compose_application({fields:[{칸이름,유형?,psst매핑?,답변?}], grant_id?, 사업아이템명?})로 칸별로 조립하라(PSST 순서로 재배열 금지). 0점답변·정성표현·자금표 합계 경고를 사용자에게 전달하라.\n` +
+          `4) compose_application({fields:[{field_name,field_type?,psst_section?,answer?}], grant_id?, business_item?})로 칸별로 조립하라(PSST 순서로 재배열 금지). analyze_form 결과의 필드목록을 그대로 fields에 넣으면 된다(무가공 전달). 0점답변·정성표현·자금표 합계 경고를 사용자에게 전달하라.\n` +
           `5) plan_review({sections?|fullText?})로 조립 결과를 점검하고 경고가 있으면 다시 쓰게 하라.\n` +
           `6) ${채점보완루프}\n` +
-          `7) 합격권에 들면 export_document({제목, sections:[{칸이름,내용}], format:'docx'})로 최종 파일을 만들고 다운로드 URL과 전문을 함께 안내하라.`,
+          `7) 합격권에 들면 export_document({title, sections:[{field_name,content}], format:'docx'})로 최종 파일을 만들고 다운로드 URL과 전문을 함께 안내하라.`,
       };
 
     case "계획서작성":
@@ -428,12 +428,12 @@ function 템플릿(의도: Intent): Template {
         ],
         프롬프트본문: (s) =>
           `[의도: 계획서작성 — PSST 풀코스]\n` +
-          `1) 사업 자료에서 업종=${업종리터럴(s)}·단계=${단계리터럴(s)}·지역=${지역리터럴(s)}·강점·키워드를 정리해 확인받고 plan_outline({업종?,지역?,대표경력?,grant_id?})로 골격을 잡아라.\n` +
+          `1) 사업 자료에서 업종=${업종리터럴(s)}·단계=${단계리터럴(s)}·지역=${지역리터럴(s)}·강점·키워드를 정리해 확인받고 plan_outline({industry?,region?,founder_experience?,grant_id?})로 골격을 잡아라.\n` +
           `2) required_inputs({grant_id?, provided?})로 P·S1·S2·T에 꼭 필요한 사실만 섹션별로 물어라(몰아 묻지 마라, 추정 금지).\n` +
           `3) draft_section({section:'P'|'S1'|'S2'|'T', inputs})로 P→S1→S2→T를 차례로 작성하라. 제공 사실만 쓰고 빠진 건 '[입력 필요]'로 두어라. 0점답변·정성표현이 잡히면 고쳐 써라.\n` +
           `4) market_research({...})·build_roadmap({...})로 시장규모·경쟁·자금 징검다리 도식을 만들어라(수치는 입력값만).\n` +
           `5) plan_review로 점검한 뒤, ${채점보완루프}\n` +
-          `6) assemble_plan({sections:{P?,S1?,S2?,T?}, grant_id?, 목표페이지?, charts?})로 정부양식 순서로 합본하고 hwp_layout({목표페이지?,현재글자수?})로 분량을 맞춰라. 최종은 사용자가 검토 후 HWP 양식에 넣는다고 안내하라.`,
+          `6) assemble_plan({sections:{P?,S1?,S2?,T?}, grant_id?, target_pages?, charts?})로 정부양식 순서로 합본하고 hwp_layout({target_pages?,current_chars?})로 분량을 맞춰라. 최종은 사용자가 검토 후 HWP 양식에 넣는다고 안내하라.`,
       };
 
     case "시장조사":
@@ -457,7 +457,7 @@ function 템플릿(의도: Intent): Template {
         프롬프트본문: (s) =>
           `[의도: 시장조사]\n` +
           `1) required_inputs로 업종=${업종리터럴(s)}·지역=${지역리터럴(s)}·비교축·시장 수치(TAM/SAM/SOM/LAM)·출처를 사용자에게 확인하라(수치는 절대 추정 금지).\n` +
-          `2) market_research({업종?,지역?,pest?,marketSize?,competitors?,비교축?})로 PEST·시장규모·경쟁비교표·레이더 도식을 생성하라. 없는 값은 '[입력 필요]'로 남겨라.\n` +
+          `2) market_research({industry?,region?,pest?,marketSize?,competitors?,compare_axes?})로 PEST·시장규모·경쟁비교표·레이더 도식을 생성하라. 없는 값은 '[입력 필요]'로 남겨라.\n` +
           `3) 결과를 draft_section(S1/S2)에 반영하거나 score_application으로 심사 포인트로 연결하라.`,
       };
 
@@ -482,7 +482,7 @@ function 템플릿(의도: Intent): Template {
         프롬프트본문: (s) =>
           `[의도: 로드맵]\n` +
           `1) required_inputs로 거점=${지역리터럴(s)}·과거준비(완료)·미래 마일스톤(시점·인과)·자금계획을 확인하라(수치·시점 추정 금지).\n` +
-          `2) build_roadmap({사업명?,거점?,과거준비?,미래계획?,자금계획?})로 4축 인과 타임라인·자금 징검다리·1·3·5·7년 시장변화 서술·로드맵 도식을 생성하라.\n` +
+          `2) build_roadmap({business_name?,base_region?,past_preparations?,future_milestones?,funding_plan?})로 4축 인과 타임라인·자금 징검다리·1·3·5·7년 시장변화 서술·로드맵 도식을 생성하라.\n` +
           `3) 결과를 draft_section(S2 성장전략)에 반영하거나 score_application으로 연결하라.`,
       };
 
@@ -509,7 +509,7 @@ function 템플릿(의도: Intent): Template {
         프롬프트본문: (s) =>
           `[의도: 복합 — 추천→자격→작성]\n` +
           `1) 요청·자료에서 업종=${업종리터럴(s)}·단계=${단계리터럴(s)}·지역=${지역리터럴(s)}·키워드를 정리해 확인받아라(추정 금지).\n` +
-          `2) recommend_grants({키워드:${키워드배열리터럴(s)}${s.지역 ? `, 지역:'${s.지역}'` : ""}${s.단계 ? `, 단계:'${s.단계}'` : ""}})로 맞는 공고를 5건 이내 추천하라(필요시 find_grants 병행).\n` +
+          `2) recommend_grants({keywords:${키워드배열리터럴(s)}${s.지역 ? `, region:'${s.지역}'` : ""}${s.단계 ? `, stage:'${s.단계}'` : ""}})로 맞는 공고를 5건 이내 추천하라(필요시 find_grants 병행).\n` +
           `3) 사용자가 공고를 고르면 check_eligibility({grant_id, profile})로 자격을 확인하라.\n` +
           `4) 적합하면 required_inputs로 최소 정보를 확인하고 draft_section(P→S1→S2→T)으로 초안을 작성하라(빠진 건 '[입력 필요]').\n` +
           `5) ${채점보완루프}`,
