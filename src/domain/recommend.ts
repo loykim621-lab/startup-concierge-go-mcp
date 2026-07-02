@@ -14,7 +14,7 @@
 import { loadStore, daysUntil } from "../data/store.js";
 import type { GrantRecord } from "../data/types.js";
 import { 추천고지 } from "./disclaimer.js";
-import { tokenMatches } from "../lib/synonyms.js";
+import { tokenMatches, mentionsOtherRegion } from "../lib/synonyms.js";
 
 // -- 타입(이 파일에서 완결 정의) --
 
@@ -114,16 +114,21 @@ function 적합도산출(
     }
   }
 
-  // 지역 가점(30점)
+  // 지역 가점(30점) — 제목에 타지역(서울 등)이 명시된 전국 공고는 가점 없이 주의 표기
   if (input.지역) {
     const 지역low = input.지역.toLowerCase();
     const 공고지역 = (grant.지역 ?? "").toLowerCase();
-    if (공고지역 === "전국" || 공고지역.includes("전국")) {
-      점수 += 15;
-      이유.push("전국 공고 (지역 부분 매치)");
-    } else if (공고지역.includes(지역low) || 지역low.includes(공고지역)) {
+    const 타지역 = mentionsOtherRegion(grant.제목 ?? "", input.지역);
+    if (공고지역.includes(지역low) || (공고지역 && 지역low.includes(공고지역))) {
       점수 += 30;
       이유.push("지역 일치: " + (grant.지역 ?? ""));
+    } else if (공고지역 === "전국" || 공고지역.includes("전국")) {
+      if (타지역) {
+        이유.push(`제목에 타지역(${타지역}) 명시 — 개최지 확인 필요(지역 가점 없음)`);
+      } else {
+        점수 += 15;
+        이유.push("전국 공고 (해당 지역에서 지원 가능)");
+      }
     }
   }
 

@@ -19,7 +19,7 @@ import {
   requiredInputsShape,
   assemblePlanShape,
 } from "../lib/schemas.js";
-import { getGrant, queryGrants, loadStore } from "../data/store.js";
+import { getGrant, queryGrants, loadStore, partitionByRegion } from "../data/store.js";
 import { 표준루브릭, 기본결격조항 } from "../data/defaults.js";
 import { checkEligibility } from "../domain/eligibility.js";
 import { scoreApplication } from "../domain/scoring.js";
@@ -103,13 +103,24 @@ export function registerTools(server: McpServer): void {
         if (matched.length > 0)
           확장노트 = `'${args.keywords}' 일치 공고는 0건입니다. 대신 나머지 조건으로 지원 가능한 공고를 보여드립니다(키워드 제외 확장).`;
       }
+      // 지역 우선순위: 지역밀착 공고 최우선 → 순수 전국 공고.
+      // 접수는 전국이라도 제목에 타지역(서울 등)이 명시된 공고는 기본 제외(정직 표기).
+      let 타지역제외 = 0;
+      if (args.region) {
+        const p = partitionByRegion(matched, args.region);
+        타지역제외 = p.타지역개최.length;
+        matched = [...p.지역밀착, ...p.전국일반];
+      }
       const shown = matched.slice(0, limit);
       const store = loadStore();
       const asOf = store.collected_at?.slice(0, 10) || "수집정보 없음";
       let text = renderGrantList(shown, matched.length, asOf, now);
       if (확장노트) text = `※ 확장 검색: ${확장노트}\n\n${text}`;
+      if (타지역제외 > 0)
+        text += `\n\n※ 접수는 '전국'이지만 제목에 타지역(서울 등)이 명시된 공고 ${타지역제외}건은 제외했습니다. 보시려면 지역 조건 없이 검색하세요.`;
       return textResult(text, {
         확장검색: 확장노트,
+        타지역제외,
         기준시점: asOf,
         출처: store.source,
         전체매칭: matched.length,

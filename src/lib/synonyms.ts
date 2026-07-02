@@ -43,7 +43,37 @@ export function expandToken(token: string): string[] {
   return [...out];
 }
 
-/** haystack(소문자 텍스트)이 토큰(동의어 포함)과 매칭되는가 */
+/**
+ * haystack(소문자 텍스트)이 토큰(동의어 포함)과 매칭되는가.
+ * 짧은 영문 토큰(ai·it·sw 등)은 영단어 속 철자 오매칭(ch"ai"n, susta"in"able)을 막기 위해
+ * 단어 경계를 요구한다. 한글·긴 토큰은 부분 문자열 매칭.
+ */
 export function tokenMatches(haystackLower: string, token: string): boolean {
-  return expandToken(token).some((w) => haystackLower.includes(w));
+  return expandToken(token).some((w) => {
+    if (/^[a-z0-9]{1,3}$/.test(w)) {
+      // 앞뒤가 영숫자가 아니어야 함(한글·공백·기호·문두문미는 OK)
+      const re = new RegExp(`(?<![a-z0-9])${w}(?![a-z0-9])`, "i");
+      return re.test(haystackLower);
+    }
+    return haystackLower.includes(w);
+  });
+}
+
+/** 광역 지역명(타지역 개최 판정용) */
+export const REGION_NAMES = [
+  "서울", "부산", "대구", "인천", "대전", "울산", "세종", "광주",
+  "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주",
+] as const;
+
+/**
+ * 제목이 사용자 지역이 아닌 '다른 광역 지역'을 명시하는가.
+ * (예: 사용자=광주, 제목="서울AI로봇쇼…" → "서울" 반환. 사용자 지역 언급은 무시)
+ */
+export function mentionsOtherRegion(title: string, userRegion: string): string | null {
+  const t = title ?? "";
+  for (const r of REGION_NAMES) {
+    if (userRegion.includes(r) || r.includes(userRegion)) continue; // 내 지역은 제외
+    if (t.includes(r)) return r;
+  }
+  return null;
 }

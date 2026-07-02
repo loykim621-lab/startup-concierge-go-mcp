@@ -6,7 +6,7 @@ import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GrantRecord, GrantStoreFile } from "./types.js";
-import { tokenMatches } from "../lib/synonyms.js";
+import { tokenMatches, mentionsOtherRegion } from "../lib/synonyms.js";
 
 /** server/data/grants.json — src/와 dist/ 모두 루트 기준 2단계 상위 */
 const GRANTS_FILE =
@@ -149,6 +149,34 @@ export function queryGrants(q: GrantQuery, now: Date = new Date()): GrantRecord[
   });
 
   return q.limit ? filtered.slice(0, q.limit) : filtered;
+}
+
+/**
+ * 지역 우선순위 분류 — "광주 공고 찾아줘"의 기대에 맞게 3단 분류한다.
+ *  - 지역밀착: 공고 지역/제목에 사용자 지역이 명시 (최우선)
+ *  - 전국일반: 전국 접수이며 제목에 타지역 브랜드 없음
+ *  - 타지역개최: 접수는 전국이지만 제목에 타지역(서울 등)이 명시 — 기본 노출에서 제외 권장
+ */
+export function partitionByRegion(
+  grants: GrantRecord[],
+  userRegion: string
+): { 지역밀착: GrantRecord[]; 전국일반: GrantRecord[]; 타지역개최: GrantRecord[] } {
+  const 지역밀착: GrantRecord[] = [];
+  const 전국일반: GrantRecord[] = [];
+  const 타지역개최: GrantRecord[] = [];
+  for (const g of grants) {
+    const 공고지역 = g.지역 ?? "";
+    const 밀착 = 공고지역.includes(userRegion) && !공고지역.includes("전국");
+    const 제목언급 = (g.제목 ?? "").includes(userRegion);
+    if (밀착 || 제목언급) {
+      지역밀착.push(g);
+    } else if (mentionsOtherRegion(g.제목 ?? "", userRegion)) {
+      타지역개최.push(g);
+    } else {
+      전국일반.push(g);
+    }
+  }
+  return { 지역밀착, 전국일반, 타지역개최 };
 }
 
 export { GRANTS_FILE, daysUntil };
