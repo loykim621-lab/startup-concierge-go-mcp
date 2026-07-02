@@ -38,6 +38,34 @@ export function saveStore(grants: GrantRecord[], source: string): GrantStoreFile
   return file;
 }
 
+/**
+ * 런타임 갱신(자동 수집용) — 메모리 스토어를 원자적으로 교체하고,
+ * 디스크 기록은 best-effort(컨테이너 읽기전용 등으로 실패해도 무시 — 메모리가 진실원).
+ * 요청 경로는 계속 메모리에서 즉답하므로 갱신 중에도 응답 지연·불안정이 없다.
+ */
+export function refreshStore(
+  grants: GrantRecord[],
+  source: string,
+  opts: { persist?: boolean } = {}
+): GrantStoreFile {
+  const file: GrantStoreFile = {
+    collected_at: new Date().toISOString(),
+    source,
+    count: grants.length,
+    grants,
+  };
+  _cache = file; // 원자적 참조 교체
+  if (opts.persist !== false) {
+    try {
+      mkdirSync(dirname(GRANTS_FILE), { recursive: true });
+      writeFileSync(GRANTS_FILE, JSON.stringify(file, null, 2), "utf-8");
+    } catch {
+      // 디스크 실패는 치명 아님 — 메모리 스토어로 계속 서빙
+    }
+  }
+  return file;
+}
+
 export function getAllGrants(): GrantRecord[] {
   return loadStore().grants;
 }

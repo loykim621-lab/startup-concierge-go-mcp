@@ -9,6 +9,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
 import { createServer, SERVER_INFO } from "./server.js";
+import { startAutoRefresh } from "./data/refresh.js";
+import { loadStore } from "./data/store.js";
 
 async function runStdio(): Promise<void> {
   const server = createServer();
@@ -16,6 +18,7 @@ async function runStdio(): Promise<void> {
   await server.connect(transport);
   // stdio에서는 stderr로만 로깅(프로토콜은 stdout 사용)
   console.error(`[${SERVER_INFO.name}] stdio transport ready`);
+  startAutoRefresh(); // 공고 자동 갱신(기동 1회 + 주기, 실패 시 기존 유지)
 }
 
 async function runHttp(): Promise<void> {
@@ -27,9 +30,16 @@ async function runHttp(): Promise<void> {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  // 헬스체크 (카카오클라우드 LB용)
+  // 헬스체크 (카카오클라우드 LB용) — 공고 수집시점·건수 노출로 신선도 확인 가능
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", server: SERVER_INFO.name, version: SERVER_INFO.version });
+    const store = loadStore();
+    res.json({
+      status: "ok",
+      server: SERVER_INFO.name,
+      version: SERVER_INFO.version,
+      grants: store.count,
+      collected_at: store.collected_at,
+    });
   });
 
   // MCP 엔드포인트 (무상태)
@@ -73,6 +83,7 @@ async function runHttp(): Promise<void> {
   const port = parseInt(process.env.PORT ?? "8080", 10);
   app.listen(port, () => {
     console.error(`[${SERVER_INFO.name}] HTTP transport on :${port} (POST /mcp, GET /health)`);
+    startAutoRefresh(); // 공고 자동 갱신(기동 1회 + 주기, 실패 시 기존 유지)
   });
 }
 

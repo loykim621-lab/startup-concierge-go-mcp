@@ -57,6 +57,7 @@ npm run build && npm run start:http   # POST /mcp, GET /health  (PORT 기본 808
 ## 데이터·사실 무결성
 
 - 공고는 **K-Startup 공식 오픈 API**(`nidapi.k-startup.go.kr`, 인증키 불필요, robots 허용)에서 수집한 **실데이터**. 각 출력에 `출처·수집시점·원문URL` 표기.
+- **자동 갱신**: 서버 기동 직후 1회 + `AUTO_REFRESH_HOURS`(기본 6시간)마다 백그라운드 재수집. 실패·0건 시 기존 데이터 유지(fail-safe). 요청 경로는 외부호출 없이 메모리에서 즉답(안정성). `GET /health`에서 `grants`(건수)·`collected_at`(수집시점)으로 신선도 확인.
 - 자격·점수 **핵심 판정은 결정적 규칙**(LLM 환각 차단). 근거 없으면 **"확인 불가"**.
 - 모든 자격·점수 출력에 **"참고용, 운영기관 최종확인"** 고지.
 - 도메인 규칙 출처: `../knowledge/도메인_규칙_자격_심사.md` (시행령 제2조·통합관리지침 제14차).
