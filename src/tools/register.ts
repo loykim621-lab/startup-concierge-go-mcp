@@ -80,21 +80,36 @@ export function registerTools(server: McpServer): void {
     async (args): Promise<CallToolResult> => {
       const now = new Date();
       const limit = args.limit ?? 10;
-      const matched = queryGrants(
-        {
-          keywords: args.keywords,
-          region: args.region,
-          stage: args.stage,
-          industry: args.industry,
-          deadline_within_days: args.deadline_within_days,
-        },
-        now
-      );
+      const base = {
+        keywords: args.keywords,
+        region: args.region,
+        stage: args.stage,
+        industry: args.industry,
+        deadline_within_days: args.deadline_within_days,
+      };
+      let matched = queryGrants(base, now);
+      let 확장노트: string | null = null;
+      // 확장 1: 다중 키워드 전부일치(AND) 0건 → 일부일치(OR)로 완화
+      const 토큰수 = (args.keywords ?? "").trim().split(/\s+/).filter(Boolean).length;
+      if (matched.length === 0 && 토큰수 > 1) {
+        matched = queryGrants({ ...base, matchMode: "or" }, now);
+        if (matched.length > 0)
+          확장노트 =
+            "모든 키워드가 일치하는 공고는 0건이라, 키워드 중 일부만 일치하는 공고로 넓혀 찾았습니다.";
+      }
+      // 확장 2: 그래도 0건 → 키워드를 빼고 나머지 조건으로(빈손 대신 대안 제시, 정직 표기)
+      if (matched.length === 0 && args.keywords) {
+        matched = queryGrants({ ...base, keywords: undefined }, now);
+        if (matched.length > 0)
+          확장노트 = `'${args.keywords}' 일치 공고는 0건입니다. 대신 나머지 조건으로 지원 가능한 공고를 보여드립니다(키워드 제외 확장).`;
+      }
       const shown = matched.slice(0, limit);
       const store = loadStore();
       const asOf = store.collected_at?.slice(0, 10) || "수집정보 없음";
-      const text = renderGrantList(shown, matched.length, asOf, now);
+      let text = renderGrantList(shown, matched.length, asOf, now);
+      if (확장노트) text = `※ 확장 검색: ${확장노트}\n\n${text}`;
       return textResult(text, {
+        확장검색: 확장노트,
         기준시점: asOf,
         출처: store.source,
         전체매칭: matched.length,

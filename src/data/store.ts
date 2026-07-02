@@ -6,6 +6,7 @@ import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GrantRecord, GrantStoreFile } from "./types.js";
+import { tokenMatches } from "../lib/synonyms.js";
 
 /** server/data/grants.json — src/와 dist/ 모두 루트 기준 2단계 상위 */
 const GRANTS_FILE =
@@ -81,6 +82,8 @@ export interface GrantQuery {
   industry?: string;
   deadline_within_days?: number;
   limit?: number;
+  /** 키워드 매칭 방식: and(기본, 전부 일치) | or(하나라도 일치 — 확장 검색용) */
+  matchMode?: "and" | "or";
 }
 
 const STAGE_KEYWORDS: Record<string, string[]> = {
@@ -108,10 +111,25 @@ export function queryGrants(q: GrantQuery, now: Date = new Date()): GrantRecord[
       .join(" ")
       .toLowerCase();
 
-    if (kw && !kw.split(/\s+/).every((token) => haystack.includes(token))) return false;
-    if (q.region && !(g.지역 ?? "").includes(q.region) && !haystack.includes(q.region.toLowerCase()))
-      return false;
-    if (q.industry && !haystack.includes(q.industry.toLowerCase())) return false;
+    // 키워드: 동의어 확장 매칭(AI↔인공지능 등). 기본 AND, 확장 검색은 OR.
+    if (kw) {
+      const tokens = kw.split(/\s+/).filter(Boolean);
+      const ok =
+        q.matchMode === "or"
+          ? tokens.some((token) => tokenMatches(haystack, token))
+          : tokens.every((token) => tokenMatches(haystack, token));
+      if (!ok) return false;
+    }
+    // 지역: '전국' 공고는 어느 지역 창업자든 지원 가능하므로 항상 포함.
+    if (q.region) {
+      const 공고지역 = g.지역 ?? "";
+      const ok =
+        공고지역.includes("전국") ||
+        공고지역.includes(q.region) ||
+        tokenMatches(haystack, q.region);
+      if (!ok) return false;
+    }
+    if (q.industry && !tokenMatches(haystack, q.industry)) return false;
     if (stageWords && !stageWords.some((w) => haystack.includes(w.toLowerCase()))) return false;
     if (q.deadline_within_days !== undefined) {
       const dd = daysUntil(g.마감일, now);

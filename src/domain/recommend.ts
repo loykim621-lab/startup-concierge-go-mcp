@@ -14,6 +14,7 @@
 import { loadStore, daysUntil } from "../data/store.js";
 import type { GrantRecord } from "../data/types.js";
 import { 추천고지 } from "./disclaimer.js";
+import { tokenMatches } from "../lib/synonyms.js";
 
 // -- 타입(이 파일에서 완결 정의) --
 
@@ -104,14 +105,12 @@ function 적합도산출(
     .join(" ")
     .toLowerCase();
 
-  // 키워드 가점(35점) -- 하나라도 매치
+  // 키워드 가점(35점) -- 하나라도 매치 (동의어 확장: AI↔인공지능 등)
   if (input.키워드 && input.키워드.length > 0) {
-    const 매칭키워드 = input.키워드.filter(
-      (kw) => kw && haystack.includes(kw.toLowerCase())
-    );
+    const 매칭키워드 = input.키워드.filter((kw) => kw && tokenMatches(haystack, kw));
     if (매칭키워드.length > 0) {
       점수 += 35;
-      이유.push("키워드 일치: " + 매칭키워드.join(", "));
+      이유.push("키워드 일치(동의어 포함): " + 매칭키워드.join(", "));
     }
   }
 
