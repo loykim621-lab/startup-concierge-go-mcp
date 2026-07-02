@@ -1,5 +1,5 @@
 /**
- * 10개 MCP tool 등록 — 기존 4종 + 사업계획서 작성 지원 6종.
+ * 18개 MCP tool 등록 — 검색·자격·채점·전략 4종 + 사업계획서 지원 6종 + 추천·질문·합본 3종 + 서류 원스톱 4종 + 요청 업그레이드 1종.
  * 핵심 판정은 도메인 결정적 로직에 위임. 이 계층은 입력검증·조회·포매팅·고지만 담당.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -22,6 +22,7 @@ import {
   analyzeFormShape,
   composeApplicationShape,
   exportDocumentShape,
+  upgradeRequestShape,
 } from "../lib/schemas.js";
 import { getGrant, queryGrants, loadStore, partitionByRegion } from "../data/store.js";
 import { 표준루브릭, 기본결격조항 } from "../data/defaults.js";
@@ -53,6 +54,8 @@ import type { ComposeInput, ComposeField } from "../domain/bizplan/compose.js";
 import { buildDocx } from "../lib/docxgen.js";
 import { putFile, buildDownloadUrl } from "../lib/filestore.js";
 import { 작성고지 } from "../domain/disclaimer.js";
+import { upgradeRequest } from "../domain/upgrade.js";
+import type { UpgradeInput } from "../domain/upgrade.js";
 
 function textResult(text: string, structuredContent?: Record<string, unknown>): CallToolResult {
   const res: CallToolResult = { content: [{ type: "text", text }] };
@@ -1055,6 +1058,95 @@ export function registerTools(server: McpServer): void {
         전체텍스트,
         안내: "링크가 안 열리면 이 전문을 복사해 쓰세요 · 30분 후 만료",
         고지: 작성고지,
+      });
+    }
+  );
+
+  // ⑱ upgrade_request — 요청 업그레이드 오케스트레이터
+  server.registerTool(
+    "upgrade_request",
+    {
+      title: "요청 업그레이드 (짧은 요청 → 확장 플랜 제안)",
+      description:
+        "사용자의 짧은 요청(예: '인천 AI 창업 공고 찾아줘')을 결정적 규칙으로 분석해, " +
+        "의도(공고찾기/자격확인/서류작성/계획서작성/시장조사/로드맵/복합/기타)를 분류하고 " +
+        "지역·업종·단계 신호를 추출해 기존 17개 tool을 잇는 확장 실행 플랜으로 증폭합니다. " +
+        "가능하면 공고 검색 결과를 미리 붙여 보여주고, 꼭 필요한 것만 1~2개 확인 질문을 함께 냅니다. " +
+        "요청이 이미 구체적이면(공고 id·도구명 지정·조건 3개 이상) '바로실행'으로 표시하고 업그레이드 없이 즉시 진행을 권장합니다. " +
+        "사용자 사실은 추정해 채우지 않으며, 합격선(기본 70)은 참고값이고 실제 합격선은 공고 원문으로 확인해야 합니다.",
+      inputSchema: upgradeRequestShape,
+    },
+    async (args): Promise<CallToolResult> => {
+      const input: UpgradeInput = { 요청: args.요청, 맥락: args.맥락 };
+      const result = upgradeRequest(input);
+
+      // 프리뷰 병행 실행: '공고찾기'류 의도에서만, 사용자 사실 없이도 안전하게 미리 보여줄 수 있는
+      // find_grants/recommend_grants 결과를 최대 3건 첨부한다(upgrade.ts는 순수 계획만 담당 — 실호출은 여기서).
+      let 미리보기: Array<{ id: string; 제목: string; 주관기관: string; 마감일: string | null }> = [];
+      let 미리보기건수 = 0;
+      const 프리뷰가능 = ["공고찾기", "복합", "기타"].includes(result.의도);
+      if (프리뷰가능 && !result.바로실행) {
+        try {
+          const now = new Date();
+          const s = result.신호;
+          const 추천 = recommendGrants(
+            {
+              키워드: s.업종.length ? s.업종 : undefined,
+              지역: s.지역 ?? undefined,
+              단계: s.단계 ?? undefined,
+              limit: 3,
+            },
+            now
+          );
+          미리보기건수 = 추천.추천.length;
+          미리보기 = 추천.추천.slice(0, 3).map((g) => ({
+            id: g.id,
+            제목: g.제목,
+            주관기관: g.주관기관,
+            마감일: g.마감일 ?? null,
+          }));
+        } catch {
+          // 프리뷰 실패는 치명 아님 — 플랜 자체는 그대로 반환(조용히 죽지 않기, 부분응답)
+          미리보기 = [];
+          미리보기건수 = 0;
+        }
+      }
+
+      const lines: string[] = [`[요청 업그레이드] 의도: ${result.의도}${result.바로실행 ? " (바로실행 권장)" : ""}`];
+      result.업그레이드요약.forEach((l) => lines.push(l));
+      if (미리보기.length > 0) {
+        lines.push(`\n■ 지금 바로 ${미리보기건수}건이 매칭됩니다(미리보기 ${미리보기.length}건):`);
+        미리보기.forEach((g, i) => {
+          lines.push(`  [${i + 1}] ${g.제목} — ${g.주관기관}${g.마감일 ? ` (마감 ${g.마감일})` : ""} | id: ${g.id}`);
+        });
+      }
+      lines.push(`\n■ 확장 플랜:`);
+      result.확장플랜.forEach((p) => {
+        lines.push(`  ${p.순번}) ${p.행동}${p.도구 ? ` [${p.도구}]` : ""} — ${p.이유}`);
+      });
+      lines.push(`\n■ 품질기준:`);
+      result.품질기준.forEach((q) => lines.push(`  • ${q}`));
+      if (result.추가질문.length > 0) {
+        lines.push(`\n■ 추가 확인:`);
+        result.추가질문.forEach((q) => lines.push(`  - ${q}`));
+      }
+      lines.push(`\n${result.승인요청}`);
+      lines.push(`\n고지: ${result.고지}`);
+
+      return textResult(lines.join("\n"), {
+        의도: result.의도,
+        바로실행: result.바로실행,
+        업그레이드요약: result.업그레이드요약,
+        확장플랜: result.확장플랜,
+        품질기준: result.품질기준,
+        추가질문: result.추가질문,
+        승인요청: result.승인요청,
+        업그레이드프롬프트: result.업그레이드프롬프트,
+        신호: result.신호,
+        미리보기: 미리보기,
+        미리보기건수,
+        고지: result.고지,
+        승인후_재호출불필요: result.승인후_재호출불필요,
       });
     }
   );

@@ -229,6 +229,14 @@ export const composeApplicationShape = {
   사업아이템명: z.string().optional().describe("있으면 문서 상단 맥락에 표기."),
 };
 
+// ── 요청 업그레이드 오케스트레이터 tool의 inputSchema (ZodRawShape) ──
+
+/** upgrade_request — 짧은 요청을 업그레이드된 작업 플랜/프롬프트로 증폭(결정적, LLM 없음). */
+export const upgradeRequestShape = {
+  요청: z.string().min(1).describe("사용자의 원문 요청 그대로(예: '인천 AI 창업 공고 찾아줘')."),
+  맥락: z.string().optional().describe("사용자가 준 자료 요약·상황(선택). 서식 텍스트나 사업 소개 등."),
+};
+
 /** export_document — 합본/조립 결과를 다운로드 가능한 문서(docx/txt)로 변환. */
 export const exportDocumentShape = {
   제목: z.string().min(1).describe("문서 제목(파일명에도 사용됨)."),
