@@ -146,9 +146,46 @@ function sanitizeFilename(제목: string): string {
   return cleaned || "문서";
 }
 
+/** PlayMCP 등록 요건(심사 반려 대응): 모든 tool은 annotations 정의 + description에 서비스명 포함. */
+const SERVICE_NAME = "창업지원컨시어지GO";
+
+/** export_document만 서버 상태(다운로드 파일 토큰)를 생성 — 읽기전용·멱등 아님. 나머지는 결정적 읽기전용. */
+const NON_READONLY_TOOLS = new Set(["export_document"]);
+
+/** 등록 직전 공통 메타 주입 — 개별 tool에서 누락돼도 여기서 항상 채워진다(재발 원천 차단). */
+function withPlayMcpMeta<T extends { title?: string; description?: string; annotations?: Record<string, unknown> }>(
+  name: string,
+  config: T
+): T {
+  const description = config.description?.includes(SERVICE_NAME)
+    ? config.description
+    : `[${SERVICE_NAME}] ${config.description ?? ""}`;
+  const readOnly = !NON_READONLY_TOOLS.has(name);
+  return {
+    ...config,
+    description,
+    annotations: {
+      title: config.title ?? name,
+      readOnlyHint: readOnly,
+      destructiveHint: false,
+      idempotentHint: readOnly,
+      openWorldHint: false,
+      ...(config.annotations ?? {}),
+    },
+  };
+}
+
 export function registerTools(server: McpServer): void {
+  // 모든 registerTool 호출은 이 래퍼를 통해 PlayMCP 필수 메타(annotations·서비스명)를 주입받는다.
+  // 타입은 SDK registerTool 원형을 그대로 유지(핸들러 args 추론 보존).
+  const reg: McpServer["registerTool"] = ((name: string, config: never, cb: never) =>
+    server.registerTool(
+      name,
+      withPlayMcpMeta(name, config as Parameters<typeof withPlayMcpMeta>[1]) as never,
+      cb
+    )) as McpServer["registerTool"];
   // ① find_grants
-  server.registerTool(
+  reg(
     "find_grants",
     {
       title: "정부 창업지원 공고 검색",
@@ -217,7 +254,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ② check_eligibility
-  server.registerTool(
+  reg(
     "check_eligibility",
     {
       title: "자격 검토",
@@ -245,7 +282,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ③ score_application
-  server.registerTool(
+  reg(
     "score_application",
     {
       title: "모의 심사(채점)",
@@ -273,7 +310,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ④ win_strategy
-  server.registerTool(
+  reg(
     "win_strategy",
     {
       title: "합격 전략",
@@ -308,7 +345,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑤ plan_outline — PSST 4섹션 골격
-  server.registerTool(
+  reg(
     "plan_outline",
     {
       title: "사업계획서 PSST 골격 생성",
@@ -371,7 +408,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑥ market_research — PEST·시장규모·경쟁비교 + 도식 SVG
-  server.registerTool(
+  reg(
     "market_research",
     {
       title: "시장조사 분석 (PEST·TAM/SAM/SOM/LAM·경쟁비교)",
@@ -469,7 +506,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑦ build_roadmap — 마일스톤 4축 타임라인·자금 징검다리·로드맵 도식
-  server.registerTool(
+  reg(
     "build_roadmap",
     {
       title: "성장 로드맵 생성 (4축 타임라인·자금 징검다리·시장변화)",
@@ -551,7 +588,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑧ draft_section — 특정 PSST 섹션 초안(창업자 입력을 규칙으로 구조화)
-  server.registerTool(
+  reg(
     "draft_section",
     {
       title: "PSST 섹션 초안 작성",
@@ -608,7 +645,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑨ plan_review — 사업계획서 전체 체크리스트 점검
-  server.registerTool(
+  reg(
     "plan_review",
     {
       title: "사업계획서 체크리스트 점검",
@@ -661,7 +698,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑩ hwp_layout — HWP 분량 진단·단축키표·가독성 원칙
-  server.registerTool(
+  reg(
     "hwp_layout",
     {
       title: "HWP 레이아웃 가이드 (분량 진단·단축키·가독성)",
@@ -715,7 +752,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑪ recommend_grants — 창업자 프로필 기반 공고 적합도 랭킹 추천
-  server.registerTool(
+  reg(
     "recommend_grants",
     {
       title: "공고 적합도 추천 (키워드·지역·단계·업종 기반 랭킹)",
@@ -778,7 +815,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑫ required_inputs — 사업계획서 최소 필요 정보 질문 목록
-  server.registerTool(
+  reg(
     "required_inputs",
     {
       title: "사업계획서 최소 필요 정보 질문 목록 (PSST 섹션별)",
@@ -834,7 +871,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑬ assemble_plan — PSST 섹션·도식을 정부 양식 순서로 전체 사업계획서 합본
-  server.registerTool(
+  reg(
     "assemble_plan",
     {
       title: "사업계획서 전체 합본 (PSST 섹션·도식 → 정부 양식 순서)",
@@ -915,7 +952,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑭ locate_form_source — 공고 서식 출처 안내(파일을 대신 받아오지 않음)
-  server.registerTool(
+  reg(
     "locate_form_source",
     {
       title: "공고 서식 출처 안내 (원문 URL 안내 — 자동 다운로드 없음)",
@@ -958,7 +995,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑮ analyze_form — 붙여넣은 서식 텍스트를 필드·질문 목록으로 분석
-  server.registerTool(
+  reg(
     "analyze_form",
     {
       title: "서식 분석 (붙여넣은 서식 텍스트 → 칸·질문 목록)",
@@ -1024,7 +1061,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑯ compose_application — 서식 칸별 답변을 유형별 규칙으로 조립(서식 순서 보존)
-  server.registerTool(
+  reg(
     "compose_application",
     {
       title: "제출용 문서 조립 (서식 칸별 답변 → 붙여넣기용 본문, 원래 순서 보존)",
@@ -1101,7 +1138,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑰ export_document — 문서를 다운로드 가능한 파일(docx/txt)로 변환
-  server.registerTool(
+  reg(
     "export_document",
     {
       title: "문서 내보내기 (docx/txt 다운로드 링크 + 전문 폴백)",
@@ -1173,7 +1210,7 @@ export function registerTools(server: McpServer): void {
   );
 
   // ⑱ upgrade_request — 요청 업그레이드 오케스트레이터
-  server.registerTool(
+  reg(
     "upgrade_request",
     {
       title: "요청 업그레이드 (짧은 요청 → 확장 플랜 제안)",
